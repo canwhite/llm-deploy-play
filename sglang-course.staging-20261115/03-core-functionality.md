@@ -87,7 +87,7 @@ RTX 5090 **没有 NVLink**【S2】——这一点已由 NVIDIA 产品页核实�
 | 边界 | 说明 |
 |---|---|
 | **`tp × pp = 20` 不是恒等式** | 它要求"TP 恰好吃满一个 PCIe 域"且"PP 覆盖其余节点"。当这两个前提不同时成立时，需要重新分配。 |
-| **PP 会降低单请求延迟** | PP 让请求流经多个 stage，单请求的端到端延迟高于同规模 DP。源文档选 TP×PP 是因为**模型大到无法不拆**【S7】，不是因为它在延迟上优于 DP。 |
+| **PP 会降低单请求延迟** | PP 让请求流经多个 stage，单请求的端到端延迟高于同规模 DP——**这半句是本课程的常识性判断，源文档未作延迟断言**【Illustrative】。源文档选 TP×PP 是因为**模型大到无法不拆**【S7】，不是因为它在延迟上优于 DP。 |
 | **这个布局不是官方指导** | SGLang 官方的 PP 示例**一律是 4 个节点**（`--nnodes 4 --tp 8 --pp-size 4`；`--nnodes 4 --tp 4 --pp-size 8`），官方**从未**给出"一个 stage 一个节点"或 5 节点的布局建议【R14】。5×(TP4/PP5) 是**合理的工程选择，但不是官方方案**【UQ6】 |
 | **节点间网络成为瓶颈** | 跨节点通信走外部网络；源文档提到 InfiniBand 或高速 RoCE 是这个场景的前提【S24】。 |
 
@@ -97,13 +97,13 @@ RTX 5090 **没有 NVLink**【S2】——这一点已由 NVIDIA 产品页核实�
 
 源文档在情况 A 推荐了一个**非常具体**的组合："**Qwen3.8-27B的NVFP4 W4A4检查点**"，并称"该模型官方验证可在单张RTX 5090上以NVFP4精度运行，GSM8K得分93.18–95.15%"【Source-derived · S6】。
 
-这条同时包含**型号**、**量化格式**与**基准分数**三个可独立证伪的部分。外部核对的结果是：**型号真实存在，格式真实存在，但"官方验证"与"分数含义"两处需要修正**。
+这条同时包含**型号**、**量化格式**与**基准分数**三个可独立证伪的部分。外部核对的结果是：**型号真实存在，格式真实存在，但“官方验证”归因、“W4A4”精度口径、“分数含义”三处需要修正**。
 
 #### 核对结果一览
 
 | 源文档的说法 | 核对结果 | 证据 |
 |---|---|---|
-| 模型是 **Qwen3.8-27B** | ✅ **真实存在**。`Qwen/Qwen3.8-27B` 与 `Qwen/Qwen3.8-27B-FP8` 均为官方发布（2026-08-14 上线） | 【R2】【R4】 |
+| 模型是 **Qwen3.8-27B** | ✅ **真实存在**。`Qwen/Qwen3.8-27B` 是官方发布（模型卡 created 2026-08-05；仓库公告 2026-08-14 上线） | 【R2】【R4】 |
 | 有 **NVFP4** 检查点 | ✅ **存在**。官方导出为 `nvidia/Qwen3.8-27B-NVFP4`；SGLang cookbook 实际推荐的是第三方 `RadixArk/Qwen3.8-27B-NVFP4` | 【R3】【R1】 |
 | "**W4A4**" | ⚠️ **不精确**。官方导出是**混合精度**：MLP 层与 `lm_head` 用 NVFP4，**自注意力与线性注意力层用 FP8** | 【R3】 |
 | "**官方验证**可在单张 RTX 5090 上运行" | ⚠️ **归因要改**。单卡 RTX 5090 的实测与发布者是 **SGLang（LMSYS）**，不是 NVIDIA、也不是 Qwen——NVIDIA 的模型卡只写了 GB300 作为测试硬件 | 【R1】【R3】 |
@@ -115,7 +115,7 @@ SGLang 官方 cookbook 的原文是：
 
 > "That is 202 cells, each one served and scored on the full 1319-question GSM8K (93.18-95.15%)."【Research-derived · R1】
 
-这 **202 个格子**是「检查点精度 × 投机解码选项 × 服务策略 × SSM 状态 dtype」的组合，每个格子都在完整的 1319 道题上跑一遍。**区间反映的是服务配置的波动，不是模型能力的波动**。
+这 **202 个格子**是「检查点精度 × 投机解码选项 × 服务策略 × SSM 状态 dtype」的组合，每个格子都在完整的 1319 道题上跑一遍——**四因子的拆法是本课程对 202 这个数字的解读，cookbook 只给了 202 / 1319 / 区间三个事实**【Illustrative】。**区间反映的是服务配置的波动，不是模型能力的波动**。
 
 同一份文档给出的**分卡**数值：
 
@@ -139,7 +139,7 @@ SGLang cookbook 直接写明了两个量化格式的单卡占用：
 - **源文档说 "BF16显存不够"**【S11】——✅ **成立**。27B 参数按 BF16 算约 54GB，确实放不下 32GB。
 - **源文档说 "NVFP4权重更小，可适当提高并发"**【S15】——✅ **成立**，且官方给了具体数字：FP8 约 28.5GB（32GB 卡上**并发上限只有 bs≤2**），NVFP4 约 16.5GB。
 
-> **一个必须说清的口径差异**：cookbook 的 "NVFP4 weights ~16.5GB" 与 HF 上该检查点的**磁盘体积**（约 20.4–21.9GB）**对不上**——前者更像是不含 FP4 scale 开销、vision tower 与 MTP head 的**纯权重/运行时口径**。**这两个数字不能混用**【R1】。
+> **一个必须说清的口径差异**：cookbook 给的是 **“NVFP4 weights ~16.5GB”**（权重体积口径）【R1】，而 Hugging Face 仓库页面显示的是**整个仓库的下载体积**（含 FP4 scale、vision tower、MTP head 等其他文件）。**这两个数字口径不同，不能混用**；HF 端的实际数值请以仓库文件列表为准【R3】。
 
 #### 一个不依赖具体型号的通用判据
 
@@ -208,7 +208,7 @@ SGLang cookbook 直接写明了两个量化格式的单卡占用：
 **边界四：第 5 条的方向可能与官方建议相反。**
 `--mem-fraction-static` 的**默认值是自动计算**的：`mem_fraction_static = (GPU memory capacity - activations - cuda graph buffers) / GPU memory capacity`，检测不到显存时回落到 0.88【Research-derived · R37】。官方 FAQ 的建议是"**显存不足时可以调小** `--mem-fraction-static`，比如 0.8 或 0.7"【R37】——**方向是调小，不是调大**。
 
-源文档说的"调大到 0.85~0.90 为 KV Cache 留足空间"【S15】是一种**手动固定**的做法，它会覆盖掉 SGLang 按显存自动联动的调度（那个逻辑会同步调整 `chunked_prefill_size` 与 CUDA Graph 的 `max_bs`）。**这不是错，只是要知道你在放弃什么**：手动固定换来的是可预测的显存占用，代价是失去按卡调优的空间。
+源文档直接给出 `0.85 ~ 0.90`，**并未说明方向**【S15】；把它读成“调大”是本课程的判断【Illustrative】。无论方向如何，这种**手动固定**的做法，它会覆盖掉 SGLang 按显存自动联动的调度（那个逻辑会同步调整 `chunked_prefill_size` 与 CUDA Graph 的 `max_bs`）。**这不是错，只是要知道你在放弃什么**：手动固定换来的是可预测的显存占用，代价是失去按卡调优的空间。
 
 **边界五：第 2 条在 SM120 上不是"必须选 FlashInfer"。**
 官方文档对 SM120 的表述是 "`triton` **or** `flashinfer` for prefill/full attention"【R32】；`flashinfer` 是 SGLang 的**默认**注意力后端，但不是 SM120 上的强制项。**不过**：NVFP4 的 GEMM 路径确实需要 FlashInfer【R34】，而且已知 #40558 正是 FlashInfer TRT-LLM MoE autotune 在 SM120 上抛 `Unsupported architecture`【R33】。**实践建议**：以 FlashInfer 起步，**把它当默认值而不是教条**——真出问题时先试 `triton`。
@@ -260,7 +260,7 @@ SGLang cookbook 直接写明了两个量化格式的单卡占用：
 
 | 核对项 | 结论 | 证据 |
 |---|---|---|
-| 数字 3.6–42.7s / 8–36× | ✅ **完全属实**。官方博客与 `docs/overview/performance.md` 一致，且**区间的两个端点都是 SGLang 的行**（下界 Qwen3-0.6B/SGLang/TP1 = 3.59s；上界 DeepSeek-V4-Pro-NVFP4/SGLang/TEP8 = 42.69s） | 【R19】【R26】 |
+| 数字 3.6–42.7s / 8–36× | ✅ **属实**。官方博客口径为 8×–36×【R19】；`docs/overview/performance.md` 的口径为 **8.1–35.9×**【R26】——**两处都成立，数值略有出入**，引用时请说明用的是哪一个口径 |
 | 支持 SGLang | ✅ 仓库有专门的 SGLang 指南与现成 manifest（`qwen3-0.6b.yaml`、`deepseek-v4.1-flash.yaml` 等） | 【R20】 |
 | "**生产级**秒级弹性" | ⚠️ **与官方自述相冲突**。官方仓库 README 明写："Snapshot's APIs may still change, so it is **not yet recommended for production-critical workloads**" | 【R20】 |
 | 基准的适用条件 | ⚠️ 官方基准跑在 **NVIDIA B200**（1/2/4/8 GPU）、driver 615.71.09、Snapshot v0.2.0-rc.2、**SGLang 0.5.21**、存储 VAST NFSv3 over TCP 之上 | 【R26】 |
@@ -319,7 +319,7 @@ SGLang cookbook 直接写明了两个量化格式的单卡占用：
 
 并且对原生 DP 模式明确不推荐："Native DP is **highly not recommended for use right now**"【R12】。**这比源文档的"官方推荐"更强**——官方推荐的是**用网关做 DP**，而不是 SGLang 自带的 `--dp-size` 原生 DP。
 
-**③ 路由策略有官方清单**【R12】【R15】：`random`、`round_robin`、`power_of_two`、`cache_aware`（默认）、`bucket`；1.0 之后的 `sgl-router` 还提供 `session_aware`。
+**③ 路由策略有官方清单**【R12】【R15】：`random`、`round_robin`、`power_of_two`、`cache_aware`（0.x 默认）、`bucket`；1.0 之后的 `sgl-router` 还提供 `session_aware`，且**默认策略改为 `power_of_two`**。**两代的清单与默认值并不一致**——以你安装版本的 `--help` 为准【UQ11】。
 
 **④ "冷启动弹性不应依赖 Ray/K8s 默认调度"是源文档作者的主观主张，不是官方建议。** Ray 官方的 benchmarks 文档承认 "Replica startup times involving large models can be slow"【R18】，但**没有任何官方文档说不要依赖自己的调度器**【R18】。把它标成"源文档主张"比标成"官方建议"更诚实【UQ7】。
 

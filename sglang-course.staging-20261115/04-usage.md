@@ -5,7 +5,7 @@
 > 1. 按顺序走完源文档的**五个步骤**，每一步都有**可观察的完成判据**；
 > 2. 正确启动**情况 A（纯 DP）**与**情况 B（TP×PP）**两种形态；
 > 3. 说出每条启动参数**为什么出现在这里**；
-> 4. 识别三类最常见的启动故障，并知道先查哪一项。
+> 4. 识别常见启动故障，并知道先查哪一项。
 
 ### 证据标签约定
 
@@ -15,7 +15,9 @@
 
 ---
 
-## 4.0 开工前：确认三件事
+<a id="40-preflight"></a>
+
+## 4.0 开工前：确认五件事
 
 在写任何参数之前，先确认这三项。缺任何一项，后面都会以"莫名其妙的方式"失败。
 
@@ -82,7 +84,7 @@ nvidia-smi topo -m
 
 | 参数 | 值 | 为什么 |
 |---|---|---|
-| `--attention-backend` | `flashinfer` | Blackwell 上部分默认后端的长提示 TTFT 可能极差【S12】。⚠️ SM120 上官方允许 `triton` 或 `flashinfer`；FlashInfer 是默认值不是强制项【R32】 |
+| `--attention-backend` | `flashinfer` | Blackwell 上部分默认后端的长提示 TTFT 可能极差【S12】。⚠️ SM120 上官方允许 `triton` 或 `flashinfer`【R32】——**不是强制项**（官方文档里“自动选 FlashInfer”那句话只适用于 SM100/SM103，不适用 SM120） |
 | `--quantization` | 见下方说明 | BF16 显存不够；NVFP4 是 Blackwell 原生格式【S11】。⚠️ **合法取值里没有 `nvfp4`**【R30】 |
 | `--mem-fraction-static` | `0.85` ~ `0.90`（源文档建议） | 为 KV Cache 留足空间【S15】。⚠️ 官方默认是**自动计算**，且官方建议在 OOM 时**调小**【R37】 |
 | 容器 `--shm-size` | `32g` | 进程间通信依赖共享内存【S16】；官方 Docker 示例统一用 `32g`【R31】 |
@@ -135,6 +137,7 @@ python3 -m sglang.launch_server \
 
 ```bash
 # 节点内的 4 个副本（node0）——端口需互不冲突
+# 【Illustrative】本循环是本课程按 S7 的 5 节点 × 4 卡假设构造的，源文档只给单实例命令
 for i in 0 1 2 3; do
   CUDA_VISIBLE_DEVICES=$i nohup python3 -m sglang.launch_server \
     --model-path /path/to/model \
@@ -178,7 +181,7 @@ python3 -m sglang.launch_server \
 >
 > **`--quantization nvfp4` 不是合法取值**——SGLang 的 `QUANTIZATION_CHOICES` 里没有它，argparse 会直接拒绝【Research-derived · R30】。请换成你那个版本里对应 NVFP4 检查点的取值（候选：`modelopt_fp4` / `nvfp4_online` / `petit_nvfp4` / `mxfp4`），并先用 `--help` 核对。
 >
-> **其余参数逐字有效**：`--tp-size`、`--pp-size`、`--nnodes`、`--node-rank`、`--dist-init-addr`（别名 `--nccl-init-addr`）、`--attention-backend`、`--mem-fraction-static`、`--host`、`--port` 都已对照官方 server arguments 文档与源码逐一核实【R30】。`--attention-backend flashinfer` 也在合法取值表里【R30】。
+> **其余参数逐字有效**：`--tp-size`、`--pp-size`、`--nnodes`、`--node-rank`、`--dist-init-addr`、`--attention-backend`、`--mem-fraction-static`、`--host`、`--port` 都已对照官方 server arguments 文档与源码逐一核实【R30】。`--attention-backend flashinfer` 也在合法取值表里【R30】。
 >
 > 另外两条与本命令相关的提醒：
 > - **CUDA 13 是硬性要求**，不是推荐——CUDA 12 的 wheel 与镜像已停止发布【R31】。
@@ -193,7 +196,7 @@ python3 -m sglang.launch_server \
 | `--dist-init-addr <MASTER_IP>:20000` | 多进程的 rendezvous 地址 | 【S9】 |
 | `--nnodes 5` / `--node-rank <0-4>` | 告诉每个节点它的编号（rank） | 【S9】 |
 | `--attention-backend flashinfer` | Blackwell 后端要求 | 【S12】 |
-| `--quantization nvfp4` | Blackwell 量化要求 | 【S11】 |
+| `--quantization <NVFP4 取值>` | Blackwell 量化要求（**源文档首选**，不是硬性要求）；⚠️ `nvfp4` 不是合法取值 | 【S11】【R30】 |
 | `--mem-fraction-static 0.85` | 给 KV Cache 留空间 | 【S15】 |
 
 ### 在多节点上执行的顺序
@@ -224,7 +227,7 @@ python3 -m sglang.launch_server \
 **Seed 实例**——正常启动，不需要任何额外参数【S18】：
 
 ```bash
-python3 -m sglang.launch_server [args]
+python -m sglang.launch_server [args]
 ```
 
 **Client 实例**——增加以下参数，直接从 Seed 实例拉取权重【S19】：
@@ -278,7 +281,8 @@ python3 -m sglang.launch_server \
 >
 > 1. **它只在 Kubernetes 上可用**。官方定位是 "a Kubernetes-native checkpoint and restore system for NVIDIA GPU workloads"，要求使用 Kubernetes 自定义资源【Research-derived · R20】。**源文档设计的 5 节点裸机 SSH 部署方案，无法直接套用 Snapshot**——要么把编排层换成 K8s，要么放弃这一层。
 > 2. **多 GPU 也只能单节点**。官方限制原文："Workloads, including multi-GPU workloads, must run on a single node. Multi-node is on the roadmap."【R20】——**PP 横跨 5 个节点的整体实例无法被快照**。
-> 3. **官方自己说"暂不建议用于生产关键负载"**："Snapshot's APIs may still change, so it is **not yet recommended for production-critical workloads**"【R20】。源文档把它写成"**生产级**秒级弹性（必选）"【S21】，这个定性与 NVIDIA 自己的措辞不一致。
+> 3. **官方自己说"暂不建议用于生产关键负载"**："Snapshot's APIs may still change, so it is **not yet recommended for production-critical workloads**"【R20】。
+>    而源文档把它写成"层次二：生产级秒级弹性——NVIDIA Snapshot（必选）"【S21】——这个定性与 NVIDIA 自己的措辞不一致。
 >
 > **还有一条容易误读的数字口径**：3.6–42.7 秒是**恢复段**的耗时，不含镜像拉取、Pod 调度与运行时初始化——官方明确 "infrastructure provisioning and container image loading remain outside the measured restore path"【R19】。**端到端的"上线时间"更长**。
 
@@ -316,20 +320,22 @@ python -m sglang_router.launch_server \
   --dp-size 8
 ```
 
-**可选路由策略**：`random`、`round_robin`、`power_of_two`、`cache_aware`（默认）、`bucket`；1.0 之后的 `sgl-router` 还提供 `session_aware`【R12】【R15】。
+**可选路由策略**：`random`、`round_robin`、`power_of_two`、`cache_aware`（0.x 默认）、`bucket`；1.0 之后的 `sgl-router` 还提供 `session_aware`，且**默认策略改为 `power_of_two`**【R12】【R15】。**两代的清单与默认值并不一致**——以你安装版本的 `--help` 为准【UQ11】。
 
-> **一个必须知道的边界**：router 的工作单元是**完整的 SGLang 实例（engine）**，不是流水线 stage 组——官方自述 "A router serves one model and spreads its requests across that model's SGLang **engines**"【R15】。源文档架构图里"大模型场景路由到 PP 组"的说法【S25】，**在官方文档里没有对应**。
+> **一个必须知道的边界**：router 的工作单元是**完整的 SGLang 实例（engine）**，不是流水线 stage 组——源文档架构图里"大模型场景路由到 PP 组"的说法【S25】，**在官方文档里没有对应**。——官方自述 "A router serves one model and spreads its requests across that model's SGLang **engines**"【R15】。
 
 ### 完成判据
 
-- [ ] Router 的**后端地址清单**能覆盖全部 20 个副本（DP）或 5 个 PP 组（情况 B）——源文档的架构图正是这样区分的【S25】；
+- [ ] Router 的**后端地址清单**能覆盖全部 20 个副本（DP）；情况 B 下，每个 PP 组需**对外暴露为一个可路由实例**，共 5 个 engine 端点——源文档的架构图正是这样区分的【S25】【R15】；
 - [ ] Router 的**路由策略**对你是合适的（轮询 / 负载感知 / 缓存感知）；
 - [ ] 副本**健康检查**的失败处理符合你的预期（副本挂了，Router 应该把流量挪走）；
 - [ ] 你能说出**当前**它叫什么（`sgl-router`），以及它把请求分发到什么粒度（完整实例）
 
 ---
 
-## 4.8 三类最常见的启动故障
+<a id="48-startup-faults"></a>
+
+## 4.8 常见启动故障排查顺序
 
 按"先查哪个"排序：
 
@@ -355,7 +361,7 @@ python -m sglang_router.launch_server \
 - **情况 A** 是 20 个 `--tp-size 1` 的独立副本【S5】；**情况 B** 是 `--tp-size 4 --pp-size 5` 的跨节点 PP 组【S7】【S8】。
 - **源文档唯一给出的完整命令是情况 B 的**【S8】；情况 A 的命令形态是本课程按源文档参数拼装的【Illustrative】。
 - **多节点时 `--node-rank` 要区分**，`--dist-init-addr` 是 rendezvous，早到的节点会等【S9】。
-- **五类故障的排查顺序**：共享内存 → 量化格式 → 显存预算 → R-Fork 前提 → 快照前提。
+- **七类故障的排查顺序**：共享内存 → 量化格式 → 显存预算 → R-Fork 前提 → 快照前提 → **参数取值被拒** → **TP 无限挂起**。
 - **两处源文档的命令不能照抄**：R-Fork 的 NCCL 示例少了一个必需参数【R25】；Snapshot 在裸机多节点上根本不适用【R20】。
 
 **下一节**：[05 · 相关工具](05-related-tools.md) —— 把 Router、Ray Serve、Snapshot、KServe 这些工具放回各自的层次。

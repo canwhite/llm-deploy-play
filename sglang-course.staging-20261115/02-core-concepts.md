@@ -22,7 +22,7 @@
 
 | 并行方式 | 切分什么 | 通信发生在哪一层 | 通信频率 | 跨节点可行性（源文档判断） |
 |---|---|---|---|---|
-| **TP**（张量并行） | 模型层**内**的权重 | 每一层的前向/反向都要做 **All-Reduce** | **每层** | **不可**——不能跨节点或跨 PCIe Switch【S2】 |
+| **TP**（张量并行） | 模型层**内**的权重 | 每一层的前向/反向都要做 **All-Reduce**【Illustrative】 | **每层**【Illustrative】 | **不可**——不能跨节点或跨 PCIe Switch【S2】 |
 | **PP**（流水线并行） | 模型按**层**切成若干 stage | 只在**流水线阶段边界**做点对点通信 | 每个 stage 边界 | **可**——"对跨节点网络要求远低于TP"【S4】 |
 | **DP**（数据并行） | **不切模型**，每个副本各持一份完整权重 | 副本之间**零通信** | **无** | **可**——GPU 之间"零通信开销"【S5】 |
 
@@ -32,7 +32,7 @@
 
 > "Although Tensor Parallelism (TP) remains the conventional approach for intra-node scaling, it frequently encounters communication bottlenecks during multi-node deployments. On the other hand, pipeline parallelism only requires cross-node communication at the boundaries of each pipeline stage, which can achieve better computation-communication overlap compared to a large TP."【Research-derived · R13】
 
-数据并行一侧同样有官方表述：每个副本持有一份完整模型副本，**请求推理过程中副本之间零通信**【Research-derived · R12】。
+数据并行一侧，源文档自己的说法是“GPU 之间零通信开销”【Source-derived · S5】；SGLang 官方文档同时提醒 **native DP “highly not recommended”**，生产级 DP 建议走 Model Gateway【Research-derived · R12】。
 
 > **一处需要如实标出的措辞差异**：源文档写的是"**绝对不能**跨节点"【S2】。SGLang 官方的多节点部署文档里**确实有 TP 跨节点的示例**（`--tp 16 --nnodes 2`，8 卡 × 2 节点）【Research-derived · R14】。所以更准确的说法是：**在 PCIe-only、无 NVLink 的互联条件下，TP 跨节点是强烈不推荐的**——它的**方向**是对的，但"绝对不能"比官方指导更强。至于"跨 PCIe Switch 边界"这个具体措辞，**官方文档里没有对应表述**【R14】【UQ8】。本课程保留源文档的措辞，但把它标为**源文档的主张**而非官方规则。
 
@@ -72,7 +72,7 @@
 
 **"每参数字节数"到底怎么算**：NVFP4 不是简单的 4 bit/参数。NVIDIA 的官方技术博客给出了确切定义：NVFP4 的元素是 **E2M1（4 bit：1 符号 + 2 指数 + 1 尾数）**，每个 **16 个值的 micro-block** 共享一个 **E4M3 的 FP8 scale**，整个张量再叠加一个 **FP32 的 per-tensor scale**——因此**实际是 4.5 bit/参数**【Research-derived · R5】。相对 FP16 约省 **3.5×** 显存，相对 FP8 约省 **1.8×**【R5】。
 
-> **注意它和 MXFP4 不是一回事**。MXFP4 是 OCP 开放标准，用 **32** 元素分块 + E8M0 scale；NVFP4 用 **16** 元素分块 + E4M3 scale【R5】。在 Blackwell 上两者都受支持【R8】，但**它们的检查点不能互换**。
+> **注意它和 MXFP4 不是一回事**。NVFP4 用 **16** 元素分块 + E4M3 scale【R5】；MXFP4 是另一套分块规则（OCP 开放标准，**32** 元素分块 + E8M0 scale）——**这段对比是本课程的补充说明**【Illustrative】。在 Blackwell 上两者都受支持【R8】；但**它们的检查点不能互换**。
 
 RTX 5090 的硬件层面也支持这套格式：RTX Blackwell 架构白皮书写明 "RTX Blackwell adds new support for FP4 and FP6 Tensor Core operations"，并配有第二代 FP8 Transformer Engine【Research-derived · R7】。
 
@@ -112,7 +112,7 @@ RTX 5090 的硬件层面也支持这套格式：RTX Blackwell 架构白皮书写
 > **实践纪律**：容器部署 SGLang 时，`--shm-size` 缺失是一个**独立的、必须显式设置**的参数，不是可以省略的默认值【S16】。它和显存无关，调 `--mem-fraction-static` 解决不了它。
 
 > **两条外部核对，方向都与源文档不同**：
-> - **`--mem-fraction-static` 的默认值不是 0.85，而是"自动计算"**。官方文档原文："When unset, it is computed as `(GPU memory - reserved memory) / GPU memory`, defaulting to `0.88` if GPU memory cannot be detected"；源码里的定义是 `mem_fraction_static = (GPU memory capacity - activations - cuda graph buffers) / GPU memory capacity`【Research-derived · R37】。**官方 FAQ 的建议方向和源文档相反**——它说的是"**显存不足时可以调小** `--mem-fraction-static`，比如 0.8 或 0.7"，而不是调大留 KV Cache 空间【R37】。（另注：文档写检测不到显存时回落到 0.88，源码写 0.95，两者不一致——正常情况下能探测到显存，不走回退分支【UQ12】。）**源文档给的 0.85~0.90 属于"手动固定"的做法，会覆盖掉 SGLang 按显存自动调度的逻辑**（那个逻辑会联动 `chunked_prefill_size` 与 CUDA Graph 的 `max_bs`）。
+> - **`--mem-fraction-static` 的默认值不是 0.85，而是“自动计算”**。官方文档原文：“When unset, it is computed as `(GPU memory - reserved memory) / GPU memory`, defaulting to `0.88` if GPU memory cannot be detected”【Research-derived · R37】。**官方 FAQ 的建议方向和源文档相反**——它说的是“**显存不足时可以调小** `--mem-fraction-static`，比如 0.8 或 0.7”，而不是调大留 KV Cache 空间【Research-derived · R38】。（另注：文档写检测不到显存时回落到 0.88，源码的兜底分支写 0.95，两者不一致——正常情况下能探测到显存，不走回退分支【UQ12】。）**源文档给的 0.85~0.90 属于"手动固定"的做法，会覆盖掉 SGLang 按显存自动调度的逻辑**（那个逻辑会联动 `chunked_prefill_size` 与 CUDA Graph 的 `max_bs`）。
 > - **共享内存的官方数值是 `32g`**。SGLang 官方安装文档的启动示例统一用 `--shm-size 32g`（docs 全文出现 23 次 `32g` 写法），K8s 侧的官方清单用 `emptyDir: medium: Memory` 挂载到 `/dev/shm`【Research-derived · R31】。⚠️ 注意官方 K8s 清单**没有设 `sizeLimit`**，也把 `hostIPC: true` 作为替代方案——**"K8s 侧等价于 32g"是推断，不是官方文档的事实**【R31】。
 
 ---
@@ -142,7 +142,7 @@ RTX 5090 的硬件层面也支持这套格式：RTX Blackwell 架构白皮书写
 > - **R-Fork 的收益数字没有官方基准**。"零拷贝"与"数分钟压缩到数秒"是**源文档的说法**【S17】；在 SGLang 仓库里能确认的是那组 `--remote-instance-weight-loader-*` 参数**确实存在**【Research-derived · R22】，但**没有找到官方发布的权重加载耗时对比**，官方评测也只在 8×H20 + DeepSeek-R1 上做过【R24】。请把它当成**待实测**的假设，而不是既定结论【UQ3】。
 > - **NVIDIA Snapshot 的数字有官方出处，但有源文档没提的硬限制**。官方博客确认 "Restoring from a Snapshot artifact brings inference replicas online in **3.6 to 42.7 seconds** across tested configurations, delivering **8x to 36x speedups** over cold starts that take minutes"，并明确 "NVIDIA provides ready-made examples for vLLM, **SGLang**, and NVIDIA TensorRT LLM"【Research-derived · R19】。**但** Snapshot 官方定位是 "a checkpoint and restore system for GPU workloads **on Kubernetes**"，且多 GPU 支持限定为 "compatible workloads that span multiple GPUs **on a single node**"【R20】——**源文档设想的 5 节点裸机 SSH 部署不在它的适用范围内**。详见 [05 · 5.2.2](05-related-tools.md#522-nvidia-snapshot)。
 
-> **这张表解释了为什么源文档坚持"生产弹性用 NVIDIA Snapshot"**【S24】：R-Fork 能把"数分钟"压到"数秒"，但它**压不掉图编译**。当你的痛点是"缩容到 0 之后唤醒"，或者"滚动升级要等多久"，压掉的那段才是关键。
+> **这张表解释了为什么源文档坚持"生产弹性用 NVIDIA Snapshot"**【S24】：R-Fork 能把“数分钟”压到“数秒”，但它**压不掉图编译**——后者是本课程依据 S17“只搬权重”的描述所做的推断【Illustrative】。当你的痛点是"缩容到 0 之后唤醒"，或者"滚动升级要等多久"，压掉的那段才是关键。
 
 **代价也要说清楚**：这两条路都要**预先付出成本**。R-Fork 要求**有一个 Seed 实例正在运行**（源文档给的角色划分是：Seed 实例正常启动，新实例作为 Client 从它拉权重）【S18】【S19】；Snapshot 要求**事先启动好服务、拍下快照**【S22】。它们把"每次冷启动的等待"换成了"始终维持一份已就绪的副本或快照"。
 
@@ -152,7 +152,7 @@ RTX 5090 的硬件层面也支持这套格式：RTX Blackwell 架构白皮书写
 
 | 术语 | 一句话解释 | 出处 |
 |---|---|---|
-| **TP**（张量并行） | 把同一层权重切开，每层都要 All-Reduce | 【S2】【S3】 |
+| **TP**（张量并行） | 把同一层权重切开，每层都要 All-Reduce【Illustrative】 | 【S2】【S3】 |
 | **PP**（流水线并行） | 按层切成 stage，只在边界通信 | 【S4】【S7】 |
 | **DP**（数据并行） | 每个副本一份完整权重，互不通信 | 【S5】 |
 | **PCIe 域 / PCIe Switch** | TP 不能跨越的物理边界 | 【S2】【S3】 |
@@ -160,7 +160,7 @@ RTX 5090 的硬件层面也支持这套格式：RTX Blackwell 架构白皮书写
 | **SM_120** | RTX 5090（Blackwell 消费版）的计算能力代号 | 【S13】 |
 | **NVFP4** | Blackwell 原生的 4-bit 浮点权重格式，源文档的首选量化；实际 **4.5 bit/参数** | 【S11】【R5】 |
 | **`--quantization` 的合法取值** | **不含 `nvfp4`**。NVFP4 检查点对应的是 `modelopt_fp4` / `nvfp4_online` / `petit_nvfp4` / `mxfp4` 等取值 | 【R30】 |
-| **MXFP4** | OCP 开放标准的 4-bit 格式（32 元素分块），**与 NVFP4 不可互换** | 【R5】 |
+| **MXFP4** | 另一套 4-bit 分块格式（32 元素分块 + E8M0 scale），**与 NVFP4 不可互换** | 【Illustrative】【R8】 |
 | **FP8** | 8-bit 浮点，备选；SM120 上部分 FP8/MoE 组合会在**启动阶段**失败（见 [2.2](#precision)） | 【S11】【S13】【R33】 |
 | **W4A4** | 权重 4-bit、激活 4-bit 的量化形态 | 【S6】 |
 | **KV Cache** | 每个请求的注意力缓存；占用显存，决定并发上限 | 【S15】 |
